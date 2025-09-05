@@ -11,10 +11,7 @@ end
 rng(0);
 N = 10000;
 A = sprandsym(N, 10/N) + 7.4*speye(N);
-
 b = ones(N,1);
-
-save('A_b.mat', 'A', 'b');
 
 set(gcf,'Units','Pixels','Position',[100,30,800,700]);
 a1 = axes('Units','Pixels','Position',[120, 85, 600, 600],'FontName','Times New Roman','FontSize',20);
