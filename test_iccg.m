@@ -3,7 +3,7 @@ close all;
 format long;
 warning off;
 
-delete('iccg_mex.mexw64');
+%delete('iccg_mex.mexw64');
 if exist('iccg_mex.mexw64', 'file') ~=3
 	mex -v COPTIMFLAGS="/O2" COMPFLAGS="$COMPFLAGS /utf-8" iccg_mex.cpp;
 end
