@@ -113,13 +113,7 @@ inline void vec_copy(const double* src, double* dst, mwSize n) {
 
 inline double vec_dot(const double* x, const double* y, mwSize n) {
 	double sum = 0.0;
-	// Loop unrolling for performance improvement
-	mwSize i = 0;
-	mwSize n4 = n - (n % 4);
-	for (; i < n4; i += 4) {
-		sum += x[i] * y[i] + x[i+1] * y[i+1] + x[i+2] * y[i+2] + x[i+3] * y[i+3];
-	}
-	for (; i < n; i++) {
+	for (mwSize i = 0; i < n; i++) {
 		sum += x[i] * y[i];
 	}
 	return sum;
@@ -127,29 +121,13 @@ inline double vec_dot(const double* x, const double* y, mwSize n) {
 
 inline void vec_axpy(double alpha, const double* x, double* y, mwSize n) {
 	// Compute y = alpha * x + y
-	mwSize i = 0;
-	mwSize n4 = n - (n % 4);
-	for (; i < n4; i += 4) {
-		y[i] += alpha * x[i];
-		y[i+1] += alpha * x[i+1];
-		y[i+2] += alpha * x[i+2];
-		y[i+3] += alpha * x[i+3];
-	}
-	for (; i < n; i++) {
+	for (mwSize i = 0; i < n; i++) {
 		y[i] += alpha * x[i];
 	}
 }
 
 inline void vec_scale(double alpha, double* x, mwSize n) {
-	mwSize i = 0;
-	mwSize n4 = n - (n % 4);
-	for (; i < n4; i += 4) {
-		x[i] *= alpha;
-		x[i+1] *= alpha;
-		x[i+2] *= alpha;
-		x[i+3] *= alpha;
-	}
-	for (; i < n; i++) {
+	for (mwSize i = 0; i < n; i++) {
 		x[i] *= alpha;
 	}
 }
