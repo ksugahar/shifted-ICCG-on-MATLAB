@@ -4,6 +4,167 @@
 #include <cstring>
 #include <algorithm>
 #include <vector>
+#include <memory>
+#include <limits>
+#include <stdexcept>
+
+// Error handling utilities
+namespace ErrorHandling {
+	void validateInput(const char* param_name, const mxArray* array, bool should_be_real = true, bool should_be_scalar = false) {
+		if (should_be_scalar && !mxIsScalar(array)) {
+			mexErrMsgIdAndTxt("ICCG:invalidInput", "Parameter '%s' must be a scalar value", param_name);
+		}
+		if (should_be_real && (mxIsComplex(array) || !mxIsDouble(array))) {
+			mexErrMsgIdAndTxt("ICCG:invalidInput", "Parameter '%s' must be a real double array", param_name);
+		}
+	}
+	
+	void validateDimensions(const char* param_name, const mxArray* array, mwSize expected_rows, mwSize expected_cols) {
+		if (mxGetM(array) != expected_rows || mxGetN(array) != expected_cols) {
+			mexErrMsgIdAndTxt("ICCG:dimensionMismatch", 
+				"Parameter '%s' has incorrect dimensions: expected %lux%lu, got %lux%lu", 
+				param_name, (unsigned long)expected_rows, (unsigned long)expected_cols, 
+				(unsigned long)mxGetM(array), (unsigned long)mxGetN(array));
+		}
+	}
+	
+	void validateArraySize(const char* param_name, mwSize actual_size, mwSize expected_size) {
+		if (actual_size != expected_size) {
+			mexErrMsgIdAndTxt("ICCG:dimensionMismatch", 
+				"Parameter '%s' has incorrect size: expected %lu elements, got %lu elements", 
+				param_name, (unsigned long)expected_size, (unsigned long)actual_size);
+		}
+	}
+	
+	void throwError(const char* error_id, const char* message) {
+		mexErrMsgIdAndTxt(error_id, "%s", message);
+	}
+}
+
+// Safe type conversion utilities
+namespace SafeTypeConversion {
+	// Safe conversion from double to int with overflow/underflow checking
+	int toInt(double value, const char* param_name) {
+		// Check for NaN and infinity
+		if (!std::isfinite(value)) {
+			ErrorHandling::throwError("ICCG:invalidInput", 
+				"Parameter contains invalid value (NaN or infinity)");
+		}
+		
+		// Check for fractional part
+		if (std::fabs(value - std::round(value)) > 1e-10) {
+			ErrorHandling::throwError("ICCG:invalidInput", 
+				"Parameter must be an integer value");
+		}
+		
+		// Check for overflow/underflow
+		if (value > std::numeric_limits<int>::max() || value < std::numeric_limits<int>::min()) {
+			ErrorHandling::throwError("ICCG:overflow", 
+				"Parameter value exceeds integer range");
+		}
+		
+		return static_cast<int>(std::round(value));
+	}
+	
+	// Safe conversion from double to mwIndex with bounds checking
+	mwIndex toMwIndex(double value, const char* param_name) {
+		// Check for NaN and infinity
+		if (!std::isfinite(value)) {
+			ErrorHandling::throwError("ICCG:invalidInput", 
+				"Index contains invalid value (NaN or infinity)");
+		}
+		
+		// Check for fractional part
+		if (std::fabs(value - std::round(value)) > 1e-10) {
+			ErrorHandling::throwError("ICCG:invalidInput", 
+				"Index must be an integer value");
+		}
+		
+		// Check for negative values (mwIndex is unsigned)
+		if (value < 0.0) {
+			ErrorHandling::throwError("ICCG:invalidInput", 
+				"Index cannot be negative");
+		}
+		
+		// Check for overflow
+		if (value > std::numeric_limits<mwIndex>::max()) {
+			ErrorHandling::throwError("ICCG:overflow", 
+				"Index value exceeds maximum allowed value");
+		}
+		
+		return static_cast<mwIndex>(std::round(value));
+	}
+	
+	// Safe conversion from int to double (always safe, but explicit)
+	double toDouble(int value) {
+		return static_cast<double>(value);
+	}
+	
+	// Validate and convert MATLAB scalar to positive integer
+	int toPositiveInt(const mxArray* array, const char* param_name) {
+		if (!mxIsScalar(array)) {
+			ErrorHandling::throwError("ICCG:invalidInput", 
+				"Parameter must be a scalar value");
+		}
+		
+		double value = mxGetScalar(array);
+		int result = toInt(value, param_name);
+		
+		if (result <= 0) {
+			ErrorHandling::throwError("ICCG:invalidInput", 
+				"Parameter must be positive");
+		}
+		
+		return result;
+	}
+	
+	// Safe array index conversion with bounds checking
+	void convertIndicesArray(const double* source, std::vector<mwIndex>& target, 
+							mwSize count, bool subtract_one, const char* array_name) {
+		target.resize(count);
+		for (mwSize i = 0; i < count; i++) {
+			double value = subtract_one ? source[i] - 1.0 : source[i];
+			
+			// Validate index range for CSR format
+			if (subtract_one && source[i] < 1.0) {
+				ErrorHandling::throwError("ICCG:invalidInput", 
+					"MATLAB indices must be >= 1 for 1-based indexing");
+			}
+			
+			target[i] = toMwIndex(value, array_name);
+		}
+	}
+	
+	// Safe iteration bounds checking
+	template<typename IndexType>
+	void validateIterationCount(IndexType iteration, IndexType max_iterations, const char* context) {
+		if (iteration < 0) {
+			ErrorHandling::throwError("ICCG:invalidState", 
+				"Iteration count cannot be negative");
+		}
+		if (iteration > max_iterations && max_iterations > 0) {
+			ErrorHandling::throwError("ICCG:invalidState", 
+				"Iteration count exceeds maximum allowed iterations");
+		}
+	}
+}
+
+// Algorithm constants
+namespace Constants {
+	// Incomplete Cholesky decomposition constants
+	const double DEFAULT_SHIFT_VALUE = 1.0;           // Default shift parameter
+	const double SHIFT_INCREMENT = 0.01;              // Shift increment for adjustment
+	const double MAX_SHIFT_VALUE = 5.0;               // Maximum allowed shift value
+	const double MIN_DIAGONAL_THRESHOLD = 1.e-6;      // Minimum diagonal threshold for shift adjustment
+	const double ZERO_DIAGONAL_REPLACEMENT = 1e-10;   // Replacement value for zero/negative diagonal
+	const double RECIPROCAL_THRESHOLD = 1e-10;        // Minimum value before taking reciprocal
+	
+	// Algorithm control constants
+	const int DEFAULT_MAX_SHIFT_TRIALS = 100;         // Default maximum shift adjustment trials
+	const int DEFAULT_DIVERGE_COUNT = 10;             // Default divergence detection count
+	const double DEFAULT_DIVERGE_FACTOR = 10.0;       // Default divergence detection coefficient
+	const bool DEFAULT_USE_SCALING = true;            // Default scaling setting
+}
 
 /*
  * ICCG_MEX - Incomplete Cholesky Conjugate Gradient Method for Sparse Linear Systems
@@ -59,19 +220,37 @@
  * See also: PCG, ICHOL, SPARSE
  */
 
-// Options structure (original algorithm compliant)
+// Options structure (original algorithm compliant with extended configurability)
 struct Options {
+	// Divergence detection parameters
 	double diverge_factor;  // Divergence detection coefficient
-	int diverge_count;  // Divergence detection count
-	bool use_scaling;  // Control whether to use scaling
-	Options() : diverge_factor(10.0), diverge_count(10), use_scaling(true) {}
+	int diverge_count;      // Divergence detection count
+	bool use_scaling;       // Control whether to use scaling
+	
+	// Algorithm control parameters  
+	int max_shift_trials;           // Maximum shift adjustment trials
+	double shift_increment;         // Shift increment for adjustment
+	double max_shift_value;         // Maximum allowed shift value
+	double min_diagonal_threshold;  // Minimum diagonal threshold for shift adjustment
+	double zero_diagonal_replacement; // Replacement value for zero/negative diagonal
+	
+	Options() : 
+		diverge_factor(Constants::DEFAULT_DIVERGE_FACTOR),
+		diverge_count(Constants::DEFAULT_DIVERGE_COUNT),
+		use_scaling(Constants::DEFAULT_USE_SCALING),
+		max_shift_trials(Constants::DEFAULT_MAX_SHIFT_TRIALS),
+		shift_increment(Constants::SHIFT_INCREMENT),
+		max_shift_value(Constants::MAX_SHIFT_VALUE),
+		min_diagonal_threshold(Constants::MIN_DIAGONAL_THRESHOLD),
+		zero_diagonal_replacement(Constants::ZERO_DIAGONAL_REPLACEMENT)
+	{}
 };
 
 // Compressed row storage format structure for sparse matrices
 struct SparseMatrix {
-	double* val;	// Values of non-zero elements
-	mwIndex* row_ptr;	// Row pointers
-	mwIndex* col_idx;	// Column indices
+	std::vector<double> val;	// Values of non-zero elements
+	std::vector<mwIndex> row_ptr;	// Row pointers
+	std::vector<mwIndex> col_idx;	// Column indices
 	mwSize M;	// Number of rows
 	mwSize N;	// Number of columns
 	mwSize nnz;	// Number of non-zero elements
@@ -86,7 +265,11 @@ private:
 	bool ifix;
 
 public:
-	ICCGSolver() : shift(1.0), dShift(0.01), shiftMax(5.0), ifix(false) {}
+	ICCGSolver() : 
+		shift(Constants::DEFAULT_SHIFT_VALUE), 
+		dShift(Constants::SHIFT_INCREMENT), 
+		shiftMax(Constants::MAX_SHIFT_VALUE), 
+		ifix(false) {}
 	
 	void SetShiftParameter(double shift_val) {
 		this->shift = shift_val;
@@ -159,14 +342,33 @@ inline void sparse_symm_matvec(const SparseMatrix& A, const double* x, double* y
 	}
 }
 
+// Efficient matrix value retrieval helper with early termination
+inline double get_matrix_value(const SparseMatrix& A, mwSize row, mwSize col) {
+	// Early bounds check for efficiency
+	if (row >= A.M || col > row) return 0.0; // Lower triangular matrix
+	
+	// Binary-like search within row (assuming sorted column indices)
+	mwIndex start = A.row_ptr[row];
+	mwIndex end = A.row_ptr[row + 1];
+	
+	for (mwIndex k = start; k < end; k++) {
+		if (A.col_idx[k] == col) {
+			return A.val[k];
+		}
+		// Early termination if we've passed the target column
+		if (A.col_idx[k] > col) break;
+	}
+	return 0.0;
+}
+
 // Incomplete Cholesky decomposition that accurately reproduces the original algorithm (lower triangular input version)
 bool ichol_original_algorithm(SparseMatrix& L, const SparseMatrix& A, ICCGSolver& solver, std::vector<double>& scaling, std::vector<double>& D_out, const Options& options) {
 	mwSize n = A.M;
 	double shift = solver.getCurrentShift();
 	
 	// Adjust initial value of shift parameter
-	if (shift < 1.0) {
-		shift = 1.0;
+	if (shift < Constants::DEFAULT_SHIFT_VALUE) {
+		shift = Constants::DEFAULT_SHIFT_VALUE;
 		solver.setCurrentShift(shift);
 	}
 	
@@ -184,9 +386,9 @@ bool ichol_original_algorithm(SparseMatrix& L, const SparseMatrix& A, ICCGSolver
 	}
 	
 	// Allocate memory for lower triangular matrix L
-	L.val = new double[L_nnz];
-	L.col_idx = new mwIndex[L_nnz];
-	L.row_ptr = new mwIndex[n + 1];
+	L.val.resize(L_nnz);
+	L.col_idx.resize(L_nnz);
+	L.row_ptr.resize(n + 1);
 	L.M = n;
 	L.N = n;
 	L.nnz = L_nnz;
@@ -221,20 +423,13 @@ bool ichol_original_algorithm(SparseMatrix& L, const SparseMatrix& A, ICCGSolver
 		L.row_ptr[i + 1] = pos;
 	}
 	
-	// When applying scaling
+	// Efficient scaling calculation using original diagonal values
 	if (options.use_scaling) {
-		// Calculate scaling
 		scaling.resize(n);
 		for (mwSize i = 0; i < n; i++) {
 			scaling[i] = (original_diag[i] > 0.0) ? 1.0 / sqrt(original_diag[i]) : 1.0;
 		}
-		// Apply scaling to lower triangular matrix L
-		for (mwSize i = 0; i < n; i++) {
-			for (mwIndex k = L.row_ptr[i]; k < L.row_ptr[i + 1]; k++) {
-				mwIndex j = L.col_idx[k];
-				L.val[k] *= scaling[i] * scaling[j];
-			}
-		}
+		// Note: Scaling will be applied dynamically during matrix restoration
 	} else {
 		// If not using scaling, use unit scaling
 		scaling.resize(n, 1.0);
@@ -243,102 +438,99 @@ bool ichol_original_algorithm(SparseMatrix& L, const SparseMatrix& A, ICCGSolver
 	// Diagonal element array D (original algorithm doesn't explicitly initialize, but zero initialization is required)
 	std::vector<double> D(n, 0.0);
 	
-	// Save values of input matrix A (for restoration during recalculation)
-	std::vector<double> A_original(L_nnz);
-	for (mwSize i = 0; i < L_nnz; i++) {
-		A_original[i] = L.val[i];
-	}
-	
-	// Also save values after scaling application (for use during recalculation)
-	std::vector<double> A_scaled(L_nnz);
-	for (mwSize i = 0; i < L_nnz; i++) {
-		A_scaled[i] = L.val[i];
-	}
-	
+	// Efficient matrix restoration function using helper
+	auto restore_matrix = [&]() {
+		for (mwSize i = 0; i < n; i++) {
+			for (mwIndex k = L.row_ptr[i]; k < L.row_ptr[i + 1]; k++) {
+				mwIndex j = L.col_idx[k];
+				double original_value = get_matrix_value(A, i, j);
+				
+				// Apply scaling if enabled
+				if (options.use_scaling) {
+					L.val[k] = original_value * scaling[i] * scaling[j];
+				} else {
+					L.val[k] = original_value;
+				}
+			}
+		}
+	};
+
 	// Recalculation processing loop (as per original algorithm)
 	bool restart;
 	do {
 		restart = false;
 		
-		// Memory copy equivalent: restore lower triangular matrix L with appropriate values
-		if (options.use_scaling) {
-			// When using scaling, restore with values after scaling application
-			for (mwSize i = 0; i < L_nnz; i++) {
-				L.val[i] = A_scaled[i];
-			}
-		} else {
-			// When not using scaling, restore with original A matrix values
-			for (mwSize i = 0; i < L_nnz; i++) {
-				L.val[i] = A_original[i];
-			}
-		}
+		// Efficient matrix restoration: compute values on-demand instead of copying arrays
+		restore_matrix();
 		
-		mwIndex scol = L.row_ptr[0];
+		mwIndex start_col_index = L.row_ptr[0];
 		
 		for (mwSize i = 0; i < n; i++) {
-			mwIndex ecol = L.row_ptr[i + 1] - 1;
+			mwIndex end_col_index = L.row_ptr[i + 1] - 1;
 			
 			// Process off-diagonal elements
-			for (mwIndex k = scol; k < ecol; k++) {
-				mwIndex jnf = L.col_idx[k];
-				mwIndex jns = L.row_ptr[jnf];
-				mwIndex jne = L.row_ptr[jnf + 1] - 1;
+			for (mwIndex k = start_col_index; k < end_col_index; k++) {
+				mwIndex current_col = L.col_idx[k];
+				mwIndex col_start = L.row_ptr[current_col];
+				mwIndex col_end = L.row_ptr[current_col + 1] - 1;
 				
 				// Inner loop of Original algorithm (accurately reproduces boundary conditions)
-				for (mwIndex ki = scol, li = jns; li < jne; ) {
-					if (ki >= k) break;  // End when index reaches boundary
+				for (mwIndex row_idx = start_col_index, col_idx = col_start; col_idx < col_end; ) {
+					if (row_idx >= k) break;  // End when index reaches boundary
 					
-					mwIndex knf = L.col_idx[ki];
-					mwIndex lnf = L.col_idx[li];
+					mwIndex row_col = L.col_idx[row_idx];
+					mwIndex col_col = L.col_idx[col_idx];
 					
-					if (lnf < knf) {
-						li++;
-					} else if (lnf > knf) {
-						ki++;
+					if (col_col < row_col) {
+						col_idx++;
+					} else if (col_col > row_col) {
+						row_idx++;
 					} else {
-						// Only when lnf < jnf (use only already computed D elements)
-						if (lnf < jnf) {
-							L.val[k] -= L.val[ki] * L.val[li] / D[lnf];
+						// Only when col_col < current_col (use only already computed D elements)
+						if (col_col < current_col) {
+							L.val[k] -= L.val[row_idx] * L.val[col_idx] / D[col_col];
 						}
-						ki++;
-						li++;
+						row_idx++;
+						col_idx++;
 					}
 				}
-				// Use D[jnf] only when jnf < i (when already computed)
-				if (jnf < i) {
-					L.val[k] *= D[jnf];
+				// Use D[current_col] only when current_col < i (when already computed)
+				if (current_col < i) {
+					L.val[k] *= D[current_col];
 				}
 			}
 			
 			// Process diagonal elements (as per Original implementation)
-			double t = options.use_scaling ? A_scaled[ecol] : A_original[ecol];
-			double t0 = t;
-			if (t > 0.0) t *= shift;
+			// Get original diagonal value and apply scaling on-demand
+			double original_diag_value = original_diag[i];
+			double diagonal_value = options.use_scaling ? original_diag_value * scaling[i] * scaling[i] : original_diag_value;
+			double original_diagonal_value = diagonal_value;
+			if (diagonal_value > 0.0) diagonal_value *= shift;
 			
-			for (mwIndex k = scol; k < ecol; k++) {
-				mwIndex col_k = L.col_idx[k];
+			for (mwIndex k = start_col_index; k < end_col_index; k++) {
+				mwIndex col_index = L.col_idx[k];
 				// Use only already computed D elements
-				if (col_k < i) {
-					t -= L.val[k] * L.val[k] / D[col_k];
+				if (col_index < i) {
+					diagonal_value -= L.val[k] * L.val[k] / D[col_index];
 				}
 			}
 			
 			// Shift adjustment judgment
 			if (!solver.isShiftFixed()) {
-				if (t < 1.e-6 && t0 > 0.0 && shift < 5.0) {
+				if (diagonal_value < options.min_diagonal_threshold && original_diagonal_value > 0.0 && shift < options.max_shift_value) {
 					restart = true;
-					shift += 0.01;
+					shift += options.shift_increment;
 					solver.setCurrentShift(shift);
 					break;
 				}
 			}
 			
 			// Set D[i]
-			if (t <= 0.0) t = 1e-10;
-			t = 1.0 / t;
-			D[i] = t;
+			if (diagonal_value <= 0.0) diagonal_value = options.zero_diagonal_replacement;
+			diagonal_value = 1.0 / diagonal_value;
+			D[i] = diagonal_value;
 			
-			scol = ecol + 1;
+			start_col_index = end_col_index + 1;
 		}
 	} while (restart);
 	
@@ -368,16 +560,16 @@ void apply_preconditioner_original(const SparseMatrix& L, const std::vector<doub
 	}
 	
 	// Forward substitution: solve L * y = temp (as per Original algorithm)
-	mwIndex scol = L.row_ptr[0];
+	mwIndex start_col_index = L.row_ptr[0];
 	for (mwSize i = 0; i < n; i++) {
-		double t = temp[i];
-		mwIndex ecol = L.row_ptr[i + 1] - 1;
+		double accumulated_value = temp[i];
+		mwIndex end_col_index = L.row_ptr[i + 1] - 1;
 		
-		for (mwIndex k = scol; k < ecol; k++) {
-			t -= L.val[k] * z[L.col_idx[k]];
+		for (mwIndex k = start_col_index; k < end_col_index; k++) {
+			accumulated_value -= L.val[k] * z[L.col_idx[k]];
 		}
-		z[i] = t;
-		scol = ecol + 1;
+		z[i] = accumulated_value;
+		start_col_index = end_col_index + 1;
 	}
 	
 	// Diagonal scaling using D array
@@ -386,15 +578,15 @@ void apply_preconditioner_original(const SparseMatrix& L, const std::vector<doub
 	}
 	
 	// Backward substitution: solve L^T * y = z
-	mwIndex ecol = L.row_ptr[n] - 1;
+	mwIndex end_col_index = L.row_ptr[n] - 1;
 	for (int i = n - 1; i >= 0; i--) {
-		mwIndex scol = L.row_ptr[i];
-		double t = z[i];
+		mwIndex start_col_index = L.row_ptr[i];
+		double current_value = z[i];
 		
-		for (mwIndex k = scol; k < L.row_ptr[i + 1] - 1; k++) {
-			z[L.col_idx[k]] -= L.val[k] * t;
+		for (mwIndex k = start_col_index; k < L.row_ptr[i + 1] - 1; k++) {
+			z[L.col_idx[k]] -= L.val[k] * current_value;
 		}
-		ecol = scol - 1;
+		end_col_index = start_col_index - 1;
 	}
 	
 	// Scale output vector when using scaling
@@ -413,15 +605,15 @@ void incomplete_cholesky_conjugate_gradient(const SparseMatrix& A, const double*
 	mwSize n = A.M;
 
 	// Allocate working vectors
-	double* r = new double[n];	// Residual vector
-	double* z = new double[n];	// Preconditioned residual
-	double* p = new double[n];	// Search direction
-	double* Ap = new double[n];	// A * p
-	double* temp = new double[n];	// Temporary work
-	double* best_x = new double[n];	// Store best solution
+	std::vector<double> residual(n);	// Residual vector
+	std::vector<double> preconditioned_residual(n);	// Preconditioned residual
+	std::vector<double> search_direction(n);	// Search direction
+	std::vector<double> matrix_times_search_direction(n);	// A * p
+	std::vector<double> temp_vector(n);	// Temporary work
+	std::vector<double> best_solution(n);	// Store best solution
 
-	// Maximum number of shift adjustment trials
-	int max_shift_trials = 100;
+	// Maximum number of shift adjustment trials (configurable)
+	int max_shift_trials = options.max_shift_trials;
 	bool decomposition_success = false;
 	
 	// L matrix and scaling
@@ -431,11 +623,11 @@ void incomplete_cholesky_conjugate_gradient(const SparseMatrix& A, const double*
 	
 	// Shift adjustment loop
 	for (int trial = 0; trial < max_shift_trials; trial++) {
-		// Free previous memory (for retry cases)
+		// Clear previous memory (for retry cases)
 		if (trial > 0) {
-			delete[] L_csr.val;
-			delete[] L_csr.col_idx;
-			delete[] L_csr.row_ptr;
+			L_csr.val.clear();
+			L_csr.col_idx.clear();
+			L_csr.row_ptr.clear();
 		}
 		
 		// Execute IC(0) incomplete Cholesky decomposition (Original algorithm)
@@ -446,8 +638,8 @@ void incomplete_cholesky_conjugate_gradient(const SparseMatrix& A, const double*
 			break;
 		} else {
 			// Adjust shift and retry
-			if (!solver.isShiftFixed() && solver.getCurrentShift() < 5.0) {
-				double new_shift = solver.getCurrentShift() + 0.01;
+			if (!solver.isShiftFixed() && solver.getCurrentShift() < options.max_shift_value) {
+				double new_shift = solver.getCurrentShift() + options.shift_increment;
 				solver.setCurrentShift(new_shift);
 			} else {
 				break;  // Adjustment not possible
@@ -457,100 +649,99 @@ void incomplete_cholesky_conjugate_gradient(const SparseMatrix& A, const double*
 	
 	if (!decomposition_success) {
 		*flag = 2;  // Decomposition failed
-		delete[] r; delete[] z; delete[] p; delete[] Ap; delete[] temp; delete[] best_x;
 		return;
 	}
 
 	// Diagonal element array D and scaling array are managed separately
 
-	// Calculate initial residual: r = b - A * x (symmetric matrix version)
-	sparse_symm_matvec(A, x, r);
+	// Calculate initial residual: residual = b - A * x (symmetric matrix version)
+	sparse_symm_matvec(A, x, residual.data());
 	for (mwSize i = 0; i < n; i++) {
-		r[i] = b[i] - r[i];
+		residual[i] = b[i] - residual[i];
 	}
 
-	// Initial preconditioned residual: z = M^(-1) * r
-	apply_preconditioner_original(L_csr, D, scaling, r, z, temp, options);
+	// Initial preconditioned residual: preconditioned_residual = M^(-1) * residual
+	apply_preconditioner_original(L_csr, D, scaling, residual.data(), preconditioned_residual.data(), temp_vector.data(), options);
 
-	// Initial search direction: p = z
-	vec_copy(z, p, n);
+	// Initial search direction: search_direction = preconditioned_residual
+	vec_copy(preconditioned_residual.data(), search_direction.data(), n);
 
 	// Initial inner products
-	double rz_old = vec_dot(r, z, n);
-	double rz_new;
-	double r0_norm = std::sqrt(vec_dot(r, r, n));
-	double r_norm = r0_norm;
+	double residual_dot_preconditioned_old = vec_dot(residual.data(), preconditioned_residual.data(), n);
+	double residual_dot_preconditioned_new;
+	double initial_residual_norm = std::sqrt(vec_dot(residual.data(), residual.data(), n));
+	double current_residual_norm = initial_residual_norm;
 
 	// Divergence detection variables following original algorithm
-	double initial_error = r_norm / r0_norm;  // Initial error (following original algorithm)
+	double initial_error = current_residual_norm / initial_residual_norm;  // Initial error (following original algorithm)
 	double error_minimum;  // Set within convergence judgment function
-	vec_copy(x, best_x, n);
-	int no_iterations_to_minimum = 0;  // Iteration count where best solution was found
-	int flag_store = 0;  // Counter for divergence detection
+	vec_copy(x, best_solution.data(), n);
+	int iteration_of_minimum_error = 0;  // Iteration count where best solution was found
+	int divergence_counter = 0;  // Counter for divergence detection
 
 	// Record residual history (adjusted so that iteration count=1 corresponds to array index=1)
-	residual_log[0] = r_norm / r0_norm;  // Initial residual at iteration count 0
+	residual_log[0] = current_residual_norm / initial_residual_norm;  // Initial residual at iteration count 0
 
 	// Incomplete Cholesky Conjugate Gradient iterations (following original algorithm: 1-based counter)
-	int iter;
-	for (iter = 1; iter <= max_iter; iter++) {
-		// Matrix-vector product Ap = A * p (symmetric matrix version)
-		sparse_symm_matvec(A, p, Ap);
+	int iteration;
+	for (iteration = 1; iteration <= max_iter; iteration++) {
+		// Matrix-vector product matrix_times_search_direction = A * search_direction (symmetric matrix version)
+		sparse_symm_matvec(A, search_direction.data(), matrix_times_search_direction.data());
 		
-		// Step size alpha = (r' * z) / (p' * A * p)
-		double pAp = vec_dot(p, Ap, n);
-		double alpha = rz_old / pAp;
+		// Step size alpha = (residual' * preconditioned_residual) / (search_direction' * A * search_direction)
+		double search_direction_dot_matrix_product = vec_dot(search_direction.data(), matrix_times_search_direction.data(), n);
+		double step_size = residual_dot_preconditioned_old / search_direction_dot_matrix_product;
 		
-		// Update solution vector x = x + alpha * p
-		vec_axpy(alpha, p, x, n);
+		// Update solution vector x = x + alpha * search_direction
+		vec_axpy(step_size, search_direction.data(), x, n);
 		
-		// Update residual vector r = r - alpha * A * p
-		vec_axpy(-alpha, Ap, r, n);
+		// Update residual vector residual = residual - alpha * A * search_direction
+		vec_axpy(-step_size, matrix_times_search_direction.data(), residual.data(), n);
 		
-		// Preconditioned residual z = M^(-1) * r
-		apply_preconditioner_original(L_csr, D, scaling, r, z, temp, options);
+		// Preconditioned residual preconditioned_residual = M^(-1) * residual
+		apply_preconditioner_original(L_csr, D, scaling, residual.data(), preconditioned_residual.data(), temp_vector.data(), options);
 		
 		// New inner product
-		rz_new = vec_dot(r, z, n);
+		residual_dot_preconditioned_new = vec_dot(residual.data(), preconditioned_residual.data(), n);
 		
-		// Search direction coefficient beta = (r_new' * z_new) / (r_old' * z_old)
-		double beta = rz_new / rz_old;
+		// Search direction coefficient beta = (residual_new' * preconditioned_residual_new) / (residual_old' * preconditioned_residual_old)
+		double beta_coefficient = residual_dot_preconditioned_new / residual_dot_preconditioned_old;
 		
-		// Update search direction p = z + beta * p
-		vec_scale(beta, p, n);
-		vec_axpy(1.0, z, p, n);
+		// Update search direction search_direction = preconditioned_residual + beta * search_direction
+		vec_scale(beta_coefficient, search_direction.data(), n);
+		vec_axpy(1.0, preconditioned_residual.data(), search_direction.data(), n);
 		
 		// Move to next iteration
-		rz_old = rz_new;
-		r_norm = std::sqrt(vec_dot(r, r, n));
+		residual_dot_preconditioned_old = residual_dot_preconditioned_new;
+		current_residual_norm = std::sqrt(vec_dot(residual.data(), residual.data(), n));
 		
 		// Record residual history (iteration count=1 corresponds to array index=1)
-		residual_log[iter] = r_norm / r0_norm;
+		residual_log[iteration] = current_residual_norm / initial_residual_norm;
 
 		// Divergence detection identical to convergence judgment function from original algorithm
-		double current_relative_residual = r_norm / r0_norm;
+		double current_relative_residual = current_residual_norm / initial_residual_norm;
 		
 		// Initialization processing for iteration count == 1 (following original algorithm)
-		if (iter == 1) {
-			flag_store = 0;
+		if (iteration == 1) {
+			divergence_counter = 0;
 			error_minimum = initial_error;
 		}
 		
 		if (current_relative_residual < error_minimum) {
 			error_minimum = current_relative_residual;
-			vec_copy(x, best_x, n);  // Save best solution
-			no_iterations_to_minimum = iter;
-			flag_store = 0;  // Reset counter
+			vec_copy(x, best_solution.data(), n);  // Save best solution
+			iteration_of_minimum_error = iteration;
+			divergence_counter = 0;  // Reset counter
 		} else if (current_relative_residual < error_minimum * options.diverge_factor) {
-			flag_store = 0;  // Within tolerance range, so reset counter
+			divergence_counter = 0;  // Within tolerance range, so reset counter
 		} else {
-			++flag_store;  // Outside tolerance range, so increment counter
+			++divergence_counter;  // Outside tolerance range, so increment counter
 		}
 		
 		// Termination condition: (relative error < convergence threshold || divergence flag counter > divergence detection count)
-		if (current_relative_residual < tol || flag_store > options.diverge_count) {
+		if (current_relative_residual < tol || divergence_counter > options.diverge_count) {
 			// As in the original algorithm, always restore the best solution upon termination
-			vec_copy(best_x, x, n);
+			vec_copy(best_solution.data(), x, n);
 			
 			if (current_relative_residual < tol) {
 				// Termination due to convergence
@@ -564,8 +755,8 @@ void incomplete_cholesky_conjugate_gradient(const SparseMatrix& A, const double*
 	}
 
 	// Also restore best solution when maximum iteration count is reached (same as termination function in original algorithm)
-	if (iter > max_iter) {
-		vec_copy(best_x, x, n);
+	if (iteration > max_iter) {
+		vec_copy(best_solution.data(), x, n);
 		*flag = 1;  // Maximum iteration count reached
 	}
 
@@ -573,139 +764,161 @@ void incomplete_cholesky_conjugate_gradient(const SparseMatrix& A, const double*
 	// So scaling restoration is not needed
 
 	// Return results
-	// Use iter after exiting the loop as is, since it uses iter after the Final() function in Original
-	*residual_norm = ((*flag == 3 || *flag == 1) ? error_minimum : r_norm / r0_norm);
-	*iterations = iter;  // Actual iteration count (following Original)
-	*iter_best = no_iterations_to_minimum;  // Iteration count of best solution
+	// Use iteration after exiting the loop as is, since it uses iteration after the Final() function in Original
+	*residual_norm = ((*flag == 3 || *flag == 1) ? error_minimum : current_residual_norm / initial_residual_norm);
+	*iterations = iteration;  // Actual iteration count (following Original)
+	*iter_best = iteration_of_minimum_error;  // Iteration count of best solution
 	if (*flag != 3 && *flag != 1) {
 		*flag = 0;  // Normal convergence
 	}
 
-	// Free memory
-	delete[] r;
-	delete[] z;
-	delete[] p;
-	delete[] Ap;
-	delete[] temp;
-	delete[] best_x;
-	delete[] L_csr.val;
-	delete[] L_csr.col_idx;
-	delete[] L_csr.row_ptr;
+	// Memory is automatically freed by std::vector destructors
 }
 
 // MEX gateway function
 void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
 
-	// Check input arguments (vals, col_ind, row_ptr, b, tol, max_iter, shift, x0, options)
-	// Note: vals and col_ind contain only the lower triangular part of the symmetric matrix
+	// Validate number of input and output arguments
 	if (nrhs != 9) {
-		mexErrMsgIdAndTxt("ICCG:invalidNumInputs", 
+		ErrorHandling::throwError("ICCG:invalidNumInputs", 
+			"Expected exactly 9 input arguments.\n"
 			"Usage: [x, flag, relres, iter, residual_log, shift_used] = iccg_mex(vals, col_ind, row_ptr, b, tol, max_iter, shift, x0, options)\n"
 			"Note: vals and col_ind should contain only the lower triangular part of the symmetric matrix");
 	}
 
-	// Check output arguments
 	if (nlhs > 6) {
-		mexErrMsgIdAndTxt("ICCG:invalidNumOutputs", "Too many output arguments");
+		ErrorHandling::throwError("ICCG:invalidNumOutputs", "Maximum 6 output arguments allowed");
 	}
 
-	// Get CSR format data for matrix A
+	// Validate and extract CSR format data for matrix A
 	// vals: values of non-zero elements
-	if (!mxIsDouble(prhs[0]) || mxIsComplex(prhs[0])) {
-		mexErrMsgIdAndTxt("ICCG:invalidInput", "vals must be a real double array");
-	}
+	ErrorHandling::validateInput("vals", prhs[0]);
 	double* vals = mxGetPr(prhs[0]);
 	mwSize nnz = mxGetNumberOfElements(prhs[0]);
 
 	// col_ind: column indices
-	if (!mxIsDouble(prhs[1]) || mxIsComplex(prhs[1])) {
-		mexErrMsgIdAndTxt("ICCG:invalidInput", "col_ind must be a real double array");
-	}
-	if (mxGetNumberOfElements(prhs[1]) != nnz) {
-		mexErrMsgIdAndTxt("ICCG:invalidInput", "col_ind must have the same number of elements as vals");
-	}
+	ErrorHandling::validateInput("col_ind", prhs[1]);
+	ErrorHandling::validateArraySize("col_ind", mxGetNumberOfElements(prhs[1]), nnz);
 	double* col_ind_double = mxGetPr(prhs[1]);
 
 	// row_ptr: row pointers
-	if (!mxIsDouble(prhs[2]) || mxIsComplex(prhs[2])) {
-		mexErrMsgIdAndTxt("ICCG:invalidInput", "row_ptr must be a real double array");
-	}
+	ErrorHandling::validateInput("row_ptr", prhs[2]);
 	double* row_ptr_double = mxGetPr(prhs[2]);
 	mwSize M = mxGetNumberOfElements(prhs[2]) - 1;
 	mwSize N = M;
 
-	mexPrintf("A matrix (symmetric, lower triangular): M=%d  N=%d  nonzero=%d\n", M, N, nnz);
+	mexPrintf("A matrix (symmetric, lower triangular): M=%lu  N=%lu  nonzero=%lu\n", 
+		(unsigned long)M, (unsigned long)N, (unsigned long)nnz);
 
-	// Get vector b
-	if (mxGetM(prhs[3]) != M || mxGetN(prhs[3]) != 1) {
-		mexErrMsgIdAndTxt("ICCG:invalidInput", "Vector b must have the same number of rows as the matrix");
-	}
+	// Validate and extract vector b
+	ErrorHandling::validateInput("b", prhs[3]);
+	ErrorHandling::validateDimensions("b", prhs[3], M, 1);
 	double* b = mxGetPr(prhs[3]);
 
-	// Get tolerance tol
-	if (!mxIsScalar(prhs[4])) {
-		mexErrMsgIdAndTxt("ICCG:invalidInput", "Tolerance tol must be a scalar");
-	}
+	// Validate and extract tolerance
+	ErrorHandling::validateInput("tol", prhs[4], true, true);
 	double tol = mxGetScalar(prhs[4]);
-
-	// Get maximum iterations max_iter
-	if (!mxIsScalar(prhs[5])) {
-		mexErrMsgIdAndTxt("ICCG:invalidInput", "Maximum iterations max_iter must be a scalar");
+	if (tol <= 0.0) {
+		ErrorHandling::throwError("ICCG:invalidInput", "Tolerance 'tol' must be positive");
 	}
-	int max_iter = static_cast<int>(mxGetScalar(prhs[5]));
 
-	// Get shift parameter
-	if (!mxIsScalar(prhs[6])) {
-		mexErrMsgIdAndTxt("ICCG:invalidInput", "Shift parameter must be a scalar");
-	}
+	// Validate and extract maximum iterations
+	ErrorHandling::validateInput("max_iter", prhs[5], true, true);
+	int max_iter = SafeTypeConversion::toPositiveInt(prhs[5], "max_iter");
+
+	// Validate and extract shift parameter
+	ErrorHandling::validateInput("shift", prhs[6], true, true);
 	double shift = mxGetScalar(prhs[6]);
+	if (shift < 0.0) {
+		ErrorHandling::throwError("ICCG:invalidInput", "Shift parameter must be non-negative");
+	}
 
-	// Get initial guess x0
+	// Validate and extract initial guess x0
 	double* x0 = nullptr;
 	if (!mxIsEmpty(prhs[7])) {
-		if (mxGetM(prhs[7]) != M || mxGetN(prhs[7]) != 1) {
-			mexErrMsgIdAndTxt("ICCG:invalidInput", "Initial guess x0 must have the same size as b");
-		}
+		ErrorHandling::validateInput("x0", prhs[7]);
+		ErrorHandling::validateDimensions("x0", prhs[7], M, 1);
 		x0 = mxGetPr(prhs[7]);
 	}
 
-	// Get options
+	// Validate and extract options
 	Options options;
 	if (!mxIsEmpty(prhs[8])) {
 		if (!mxIsStruct(prhs[8])) {
-			mexErrMsgIdAndTxt("ICCG:invalidInput", "options must be a struct");
+			ErrorHandling::throwError("ICCG:invalidInput", "Parameter 'options' must be a struct");
 		}
 		
-		// Get diverge_factor
+		// Validate and extract diverge_factor
 		mxArray* diverge_factor_field = mxGetField(prhs[8], 0, "diverge_factor");
 		if (diverge_factor_field != nullptr) {
-			if (!mxIsScalar(diverge_factor_field)) {
-				mexErrMsgIdAndTxt("ICCG:invalidInput", "options.diverge_factor must be a scalar");
-			}
+			ErrorHandling::validateInput("options.diverge_factor", diverge_factor_field, true, true);
 			options.diverge_factor = mxGetScalar(diverge_factor_field);
+			if (options.diverge_factor <= 1.0) {
+				ErrorHandling::throwError("ICCG:invalidInput", "options.diverge_factor must be greater than 1.0");
+			}
 		}
 		
+		// Validate and extract diverge_count
 		mxArray* diverge_count_field = mxGetField(prhs[8], 0, "diverge_count");
 		if (diverge_count_field != nullptr) {
-			if (!mxIsScalar(diverge_count_field)) {
-				mexErrMsgIdAndTxt("ICCG:invalidInput", "options.diverge_count must be a scalar");
-			}
-			options.diverge_count = static_cast<int>(mxGetScalar(diverge_count_field));
+			options.diverge_count = SafeTypeConversion::toPositiveInt(diverge_count_field, "options.diverge_count");
 		}
 		
-		// Get scaling (true/false or non-zero/zero)
+		// Validate and extract scaling option
 		mxArray* scaling_field = mxGetField(prhs[8], 0, "scaling");
 		if (scaling_field != nullptr) {
-			if (!mxIsScalar(scaling_field)) {
-				mexErrMsgIdAndTxt("ICCG:invalidInput", "options.scaling must be a scalar");
-			}
+			ErrorHandling::validateInput("options.scaling", scaling_field, true, true);
 			if (mxIsLogical(scaling_field)) {
-				// For logical values
 				options.use_scaling = mxIsLogicalScalarTrue(scaling_field);
 			} else {
-				// For numeric values: non-zero is true
 				double scaling_type = mxGetScalar(scaling_field);
 				options.use_scaling = (scaling_type != 0.0);
+			}
+		}
+		
+		// Validate and extract max_shift_trials
+		mxArray* max_shift_trials_field = mxGetField(prhs[8], 0, "max_shift_trials");
+		if (max_shift_trials_field != nullptr) {
+			options.max_shift_trials = SafeTypeConversion::toPositiveInt(max_shift_trials_field, "options.max_shift_trials");
+		}
+		
+		// Validate and extract shift_increment
+		mxArray* shift_increment_field = mxGetField(prhs[8], 0, "shift_increment");
+		if (shift_increment_field != nullptr) {
+			ErrorHandling::validateInput("options.shift_increment", shift_increment_field, true, true);
+			options.shift_increment = mxGetScalar(shift_increment_field);
+			if (options.shift_increment <= 0.0) {
+				ErrorHandling::throwError("ICCG:invalidInput", "options.shift_increment must be positive");
+			}
+		}
+		
+		// Validate and extract max_shift_value
+		mxArray* max_shift_value_field = mxGetField(prhs[8], 0, "max_shift_value");
+		if (max_shift_value_field != nullptr) {
+			ErrorHandling::validateInput("options.max_shift_value", max_shift_value_field, true, true);
+			options.max_shift_value = mxGetScalar(max_shift_value_field);
+			if (options.max_shift_value <= 0.0) {
+				ErrorHandling::throwError("ICCG:invalidInput", "options.max_shift_value must be positive");
+			}
+		}
+		
+		// Validate and extract min_diagonal_threshold
+		mxArray* min_diagonal_threshold_field = mxGetField(prhs[8], 0, "min_diagonal_threshold");
+		if (min_diagonal_threshold_field != nullptr) {
+			ErrorHandling::validateInput("options.min_diagonal_threshold", min_diagonal_threshold_field, true, true);
+			options.min_diagonal_threshold = mxGetScalar(min_diagonal_threshold_field);
+			if (options.min_diagonal_threshold <= 0.0) {
+				ErrorHandling::throwError("ICCG:invalidInput", "options.min_diagonal_threshold must be positive");
+			}
+		}
+		
+		// Validate and extract zero_diagonal_replacement
+		mxArray* zero_diagonal_replacement_field = mxGetField(prhs[8], 0, "zero_diagonal_replacement");
+		if (zero_diagonal_replacement_field != nullptr) {
+			ErrorHandling::validateInput("options.zero_diagonal_replacement", zero_diagonal_replacement_field, true, true);
+			options.zero_diagonal_replacement = mxGetScalar(zero_diagonal_replacement_field);
+			if (options.zero_diagonal_replacement <= 0.0) {
+				ErrorHandling::throwError("ICCG:invalidInput", "options.zero_diagonal_replacement must be positive");
 			}
 		}
 	}
@@ -716,6 +929,8 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
 
 	mexPrintf("tol=%.2g  max_iter=%d  initial_shift=%.3f\n", tol, max_iter, shift);
 	mexPrintf("diverge_factor=%.2f  diverge_count=%d  scaling=%s\n", options.diverge_factor, options.diverge_count, options.use_scaling ? "true" : "false");
+	mexPrintf("max_shift_trials=%d  shift_increment=%.3f  max_shift_value=%.1f\n", options.max_shift_trials, options.shift_increment, options.max_shift_value);
+	mexPrintf("min_diagonal_threshold=%.2g  zero_diagonal_replacement=%.2g\n", options.min_diagonal_threshold, options.zero_diagonal_replacement);
 
 	// Prepare outputs
 	plhs[0] = mxCreateDoubleMatrix(M, 1, mxREAL);
@@ -729,13 +944,13 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
 	}
 
 	// Prepare residual history array
-	double* residual_log = new double[max_iter + 1];
+	std::vector<double> residual_log(max_iter + 1);
 
 	// Prepare compressed row storage format structure for input matrix
 	SparseMatrix A;
-	A.val = vals;
-	A.col_idx = new mwIndex[nnz];
-	A.row_ptr = new mwIndex[M + 1];
+	A.val.assign(vals, vals + nnz);  // Copy from input array to vector
+	A.col_idx.resize(nnz);
+	A.row_ptr.resize(M + 1);
 	A.M = M;
 	A.N = N;
 	A.nnz = nnz;
@@ -743,38 +958,26 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
 	// Index conversion
 	bool is_one_based = (row_ptr_double[0] == 1.0);
 
-	if (is_one_based) {
-		// Convert from MATLAB's 1-based indices to C++'s 0-based indices
-		for (mwSize i = 0; i < nnz; i++) {
-			A.col_idx[i] = static_cast<mwIndex>(col_ind_double[i] - 1);
-		}
-		for (mwSize i = 0; i <= M; i++) {
-			A.row_ptr[i] = static_cast<mwIndex>(row_ptr_double[i] - 1);
-		}
-	} else {
-		// Use as is if already 0-based indices
-		for (mwSize i = 0; i < nnz; i++) {
-			A.col_idx[i] = static_cast<mwIndex>(col_ind_double[i]);
-		}
-		for (mwSize i = 0; i <= M; i++) {
-			A.row_ptr[i] = static_cast<mwIndex>(row_ptr_double[i]);
-		}
-	}
+	// Safe index conversion with comprehensive validation
+	SafeTypeConversion::convertIndicesArray(col_ind_double, A.col_idx, nnz, is_one_based, "col_ind");
+	SafeTypeConversion::convertIndicesArray(row_ptr_double, A.row_ptr, M + 1, is_one_based, "row_ptr");
 
-	// Validity check for compressed row storage format
+	// Validate CSR format consistency
 	if (A.row_ptr[0] != 0) {
-		mexErrMsgIdAndTxt("ICCG:invalidCSR", "A.row_ptr[0] must be 0 after conversion");
+		ErrorHandling::throwError("ICCG:invalidCSRFormat", 
+			"Invalid CSR format: first row pointer must be 0 after index conversion");
 	}
 	if (A.row_ptr[M] != nnz) {
-		mexErrMsgIdAndTxt("ICCG:invalidCSR", "A.row_ptr[M] must equal nnz");
+		ErrorHandling::throwError("ICCG:invalidCSRFormat", 
+			"Invalid CSR format: last row pointer must equal total number of non-zeros");
 	}
 	
-	// Validity check for lower triangular format
+	// Validate lower triangular format
 	for (mwSize i = 0; i < M; i++) {
 		for (mwIndex k = A.row_ptr[i]; k < A.row_ptr[i + 1]; k++) {
 			if (A.col_idx[k] > i) {
-				mexErrMsgIdAndTxt("ICCG:invalidInput", 
-					"Input matrix must contain only lower triangular part (col_idx <= row_idx)");
+				ErrorHandling::throwError("ICCG:invalidMatrixFormat", 
+					"Matrix must contain only lower triangular part (column index <= row index)");
 			}
 		}
 	}
@@ -784,19 +987,19 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
 	int iterations;
 	int flag;
 	int iter_best;  // Iteration count of best solution
-	incomplete_cholesky_conjugate_gradient(A, b, x, tol, max_iter, solver, options, &residual_norm, &iterations, residual_log, &flag, &iter_best);
+	incomplete_cholesky_conjugate_gradient(A, b, x, tol, max_iter, solver, options, &residual_norm, &iterations, residual_log.data(), &flag, &iter_best);
 
 	mexPrintf("Final shift parameter: %.3f\n", solver.getCurrentShift());
 
 	// Additional outputs
 	if (nlhs >= 2) {
-		plhs[1] = mxCreateDoubleScalar(static_cast<double>(flag));
+		plhs[1] = mxCreateDoubleScalar(SafeTypeConversion::toDouble(flag));
 	}
 	if (nlhs >= 3) {
 		plhs[2] = mxCreateDoubleScalar(residual_norm);
 	}
 	if (nlhs >= 4) {
-		plhs[3] = mxCreateDoubleScalar(static_cast<double>(iter_best));  // Return iteration count of best solution
+		plhs[3] = mxCreateDoubleScalar(SafeTypeConversion::toDouble(iter_best));  // Return iteration count of best solution
 	}
 	if (nlhs >= 5) {
 		plhs[4] = mxCreateDoubleMatrix(iterations + 1, 1, mxREAL);
@@ -810,8 +1013,5 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
 		plhs[5] = mxCreateDoubleScalar(solver.getCurrentShift());
 	}
 
-	// Free memory
-	delete[] A.col_idx;
-	delete[] A.row_ptr;
-	delete[] residual_log;
+	// Memory is automatically freed by std::vector destructors
 }

@@ -3,7 +3,7 @@ close all;
 format long;
 warning off;
 
-%delete('iccg_mex.mexw64');
+delete('iccg_mex.mexw64');
 if exist('iccg_mex.mexw64', 'file') ~=3
 	mex -v COPTIMFLAGS="/O2" COMPFLAGS="$COMPFLAGS /utf-8" iccg_mex.cpp;
 end
@@ -22,7 +22,7 @@ a1 = axes('Units','Pixels','Position',[120, 85, 600, 600],'FontName','Times New 
 	ylabel('{residual error}');
 
 label = {};
-for scaling = [0.0];
+for scaling = [1.0];
 for shift = [1.0, 2.0];
 	tol = 1e-9;
 	max_iter = 3000;
