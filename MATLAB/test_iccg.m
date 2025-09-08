@@ -5,7 +5,7 @@ warning off;
 
 delete('iccg_mex.mexw64');
 if exist('iccg_mex.mexw64', 'file') ~=3
-	mex -v COPTIMFLAGS="/O2" COMPFLAGS="$COMPFLAGS /utf-8" iccg_mex.cpp iccg.cpp;
+	mex -v COPTIMFLAGS="/O2" COMPFLAGS="$COMPFLAGS /utf-8" -I.. iccg_mex.cpp ..\iccg.cpp;
 end
 
 rng(0);
