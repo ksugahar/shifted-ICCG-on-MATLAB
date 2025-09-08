@@ -1,0 +1,214 @@
+# ICCG Python Binding
+
+This directory contains Python bindings for the Incomplete Cholesky Conjugate Gradient (ICCG) solver using pybind11.
+
+## Files Structure
+
+```
+├── iccg.h                  # C++ header file with declarations
+├── iccg.cpp               # Pure C++ implementation (no MEX dependencies)
+├── iccg_mex.cpp           # MATLAB MEX gateway function
+├── iccg_python.cpp        # pybind11 Python binding
+├── setup.py               # Python package build script
+├── requirements.txt       # Python dependencies
+├── test_iccg_python.py    # Python test script
+└── README_Python.md       # This file
+```
+
+## Installation
+
+### Prerequisites
+
+Make sure you have Python 3.7+ and a C++ compiler installed.
+
+### Install Dependencies
+
+```bash
+pip install -r requirements.txt
+```
+
+### Build the Extension
+
+```bash
+# Method 1: Build in-place for development
+python setup.py build_ext --inplace
+
+# Method 2: Install as a package
+pip install .
+
+# Method 3: Install in development mode
+pip install -e .
+```
+
+## Usage
+
+### Basic Usage with SciPy Sparse Matrices
+
+```python
+import numpy as np
+from scipy.sparse import csr_matrix
+import iccg_solver
+
+# Create a sparse symmetric positive definite matrix
+# Note: Only provide the lower triangular part
+A_full = ...  # Your symmetric matrix
+A_lower = csr_matrix(scipy.sparse.tril(A_full))
+
+# Right-hand side vector
+b = np.array([...])
+
+# Solve using ICCG
+result = iccg_solver.solve_iccg(
+    A_lower.data,      # CSR data array
+    A_lower.indices,   # CSR column indices
+    A_lower.indptr,    # CSR row pointers
+    b,                 # Right-hand side
+    tol=1e-6,         # Convergence tolerance
+    max_iter=1000,    # Maximum iterations
+    verbose=True      # Print solver information
+)
+
+# Access results
+x = result.x                    # Solution vector
+flag = result.flag             # Convergence flag (0=converged)
+iterations = result.iterations  # Number of iterations
+residual = result.relres       # Final relative residual
+```
+
+### Simple Interface
+
+```python
+# For quick solving, use the simple interface
+x = iccg_solver.iccg_solve(
+    A_lower.data,
+    A_lower.indices, 
+    A_lower.indptr,
+    b,
+    tol=1e-6
+)
+```
+
+### Advanced Options
+
+```python
+# Use custom solver options
+options = {
+    'scaling': True,              # Enable diagonal scaling
+    'diverge_factor': 10.0,      # Divergence detection factor
+    'diverge_count': 10,         # Divergence detection count
+    'max_shift_trials': 100,     # Maximum shift adjustment trials
+    'shift_increment': 0.01,     # Shift increment step
+    'max_shift_value': 5.0,      # Maximum allowed shift
+    'min_diagonal_threshold': 1e-6,
+    'zero_diagonal_replacement': 1e-10
+}
+
+result = iccg_solver.solve_iccg(
+    A_lower.data,
+    A_lower.indices,
+    A_lower.indptr,
+    b,
+    tol=1e-8,
+    max_iter=500,
+    shift=1.0,        # Initial shift parameter
+    x0=x_initial,     # Initial guess (optional)
+    options=options,
+    verbose=True
+)
+```
+
+## Testing
+
+Run the test script to verify the installation:
+
+```bash
+python test_iccg_python.py
+```
+
+The test script will:
+1. Test basic solve functionality
+2. Test different solver options
+3. Test the simple interface
+4. Benchmark against SciPy solvers
+5. Generate convergence plots
+
+## API Reference
+
+### solve_iccg(data, indices, indptr, b, tol=1e-6, max_iter=1000, shift=1.0, x0=None, options={}, verbose=False)
+
+Solve a sparse symmetric positive definite linear system using ICCG.
+
+**Parameters:**
+- `data`: CSR format data array (lower triangular part only)
+- `indices`: CSR format column indices array  
+- `indptr`: CSR format row pointer array
+- `b`: Right-hand side vector
+- `tol`: Convergence tolerance (default: 1e-6)
+- `max_iter`: Maximum iterations (default: 1000)
+- `shift`: Initial shift parameter (default: 1.0)
+- `x0`: Initial guess vector (optional)
+- `options`: Dictionary of solver options (optional)
+- `verbose`: Print solver information (default: False)
+
+**Returns:**
+- `ICCGResult` object with fields:
+  - `x`: Solution vector
+  - `flag`: Convergence flag (0=converged, 1=max_iter, 2=decomp_failed, 3=diverged)
+  - `relres`: Relative residual norm
+  - `iterations`: Number of iterations performed  
+  - `iter_best`: Iteration where best solution was found
+  - `residual_log`: History of relative residuals
+  - `shift_used`: Final shift parameter used
+
+### iccg_solve(data, indices, indptr, b, tol=1e-6, max_iter=1000)
+
+Simple interface that returns only the solution vector.
+
+**Parameters:**
+- Same as `solve_iccg` but with fewer options
+
+**Returns:**
+- `numpy.ndarray`: Solution vector
+
+## Performance Notes
+
+1. **Matrix Format**: Only provide the lower triangular part of the symmetric matrix to reduce memory usage and computation time.
+
+2. **Scaling**: Enable scaling (`scaling: True`) for better numerical stability, especially for ill-conditioned matrices.
+
+3. **Shift Parameter**: The solver automatically adjusts the shift parameter for robustness. Start with `shift=1.0`.
+
+4. **Convergence**: Monitor the `residual_log` for convergence behavior. Adjust `tol` and `max_iter` as needed.
+
+## Comparison with MATLAB
+
+The Python binding provides the same functionality as the MATLAB MEX function:
+
+```matlab
+% MATLAB usage
+[x, flag, relres, iter, residual_log, shift_used] = iccg_mex(...
+    vals, col_ind, row_ptr, b, tol, max_iter, shift, x0, options);
+```
+
+```python
+# Python equivalent  
+result = iccg_solver.solve_iccg(
+    data, indices, indptr, b, tol, max_iter, shift, x0, options)
+x = result.x
+flag = result.flag
+relres = result.relres
+# etc.
+```
+
+## Troubleshooting
+
+1. **Import Error**: Make sure the extension is built correctly:
+   ```bash
+   python setup.py build_ext --inplace
+   ```
+
+2. **Compilation Errors**: Ensure you have a compatible C++ compiler and all dependencies installed.
+
+3. **Runtime Errors**: Check that your matrix is symmetric positive definite and only contains the lower triangular part.
+
+4. **Poor Convergence**: Try adjusting solver options like scaling, shift parameters, or tolerance.
