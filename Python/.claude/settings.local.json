@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python:*)",
+      "Bash(source:*)",
+      "Bash(pip install:*)",
+      "Read(//mnt/s/MATLAB/10_mex/02_mexC++/00_shifted_ICCG_on_MATLAB/**)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

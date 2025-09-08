@@ -1,0 +1,14 @@
+MANIFEST.in
+README_Python.md
+iccg.cpp
+iccg.h
+iccg_python.cpp
+pyproject.toml
+setup.py
+/mnt/s/MATLAB/10_mex/02_mexC++/00_shifted_ICCG_on_MATLAB/Python/../iccg.cpp
+iccg_solver.egg-info/PKG-INFO
+iccg_solver.egg-info/SOURCES.txt
+iccg_solver.egg-info/dependency_links.txt
+iccg_solver.egg-info/not-zip-safe
+iccg_solver.egg-info/requires.txt
+iccg_solver.egg-info/top_level.txt

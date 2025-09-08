@@ -1,15 +1,58 @@
+import os
+import shutil
 from pybind11.setup_helpers import Pybind11Extension, build_ext
 from setuptools import setup
+from setuptools.command.sdist import sdist
+from pathlib import Path
 
 __version__ = "0.1.0"
+
+
+class CustomSdist(sdist):
+    def run(self):
+        # Copy iccg.cpp and iccg.h to current directory for sdist
+        here = Path(__file__).parent.resolve()
+        iccg_cpp = here / ".." / "iccg.cpp"
+        iccg_h = here / ".." / "iccg.h"
+        
+        if iccg_cpp.exists():
+            shutil.copy2(str(iccg_cpp), str(here / "iccg.cpp"))
+        if iccg_h.exists():
+            shutil.copy2(str(iccg_h), str(here / "iccg.h"))
+        
+        try:
+            super().run()
+        finally:
+            # Clean up copied files
+            for f in ["iccg.cpp", "iccg.h"]:
+                if (here / f).exists():
+                    os.remove(str(here / f))
+
+
+# Get the directory containing this setup.py
+here = Path(__file__).parent.resolve()
+iccg_cpp_path = here / ".." / "iccg.cpp"
+
+# Check if we can find the iccg.cpp file
+sources = ["iccg_python.cpp"]
+include_dirs = ["."]
+
+if iccg_cpp_path.exists():
+    sources.append(str(iccg_cpp_path))
+    include_dirs.extend([".."])
+else:
+    # Fallback: assume we're building from sdist and files are copied
+    if Path("iccg.cpp").exists():
+        sources.append("iccg.cpp")
 
 ext_modules = [
     Pybind11Extension(
         "iccg_solver",
-        ["iccg_python.cpp", "iccg.cpp"],
-        include_dirs=["."],
+        sources,
+        include_dirs=include_dirs,
         cxx_std=11,
         define_macros=[("VERSION_INFO", __version__)],
+        extra_compile_args=["/wd4819"] if os.name == 'nt' else [],  # Suppress C4819 warning on Windows
     ),
 ]
 
@@ -66,7 +109,7 @@ setup(
     """,
     long_description_content_type="text/markdown",
     ext_modules=ext_modules,
-    cmdclass={"build_ext": build_ext},
+    cmdclass={"build_ext": build_ext, "sdist": CustomSdist},
     zip_safe=False,
     python_requires=">=3.7",
     install_requires=[

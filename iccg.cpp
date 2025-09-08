@@ -294,15 +294,13 @@ void apply_preconditioner_original(const SparseMatrix& L, const std::vector<doub
 	}
 	
 	// Backward substitution: solve L^T * y = z
-	size_t end_col_index = L.row_ptr[n] - 1;
-	for (int i = n - 1; i >= 0; i--) {
+	for (int i = static_cast<int>(n) - 1; i >= 0; i--) {
 		size_t start_col_index = L.row_ptr[i];
 		double current_value = z[i];
 		
 		for (size_t k = start_col_index; k < L.row_ptr[i + 1] - 1; k++) {
 			z[L.col_idx[k]] -= L.val[k] * current_value;
 		}
-		end_col_index = start_col_index - 1;
 	}
 	
 	// Scale output vector when using scaling
@@ -390,7 +388,7 @@ void incomplete_cholesky_conjugate_gradient(const SparseMatrix& A, const double*
 
 	// Divergence detection variables following original algorithm
 	double initial_error = current_residual_norm / initial_residual_norm;  // Initial error (following original algorithm)
-	double error_minimum;  // Set within convergence judgment function
+	double error_minimum = initial_error;  // Initialize with initial error
 	vec_copy(x, best_solution.data(), n);
 	int iteration_of_minimum_error = 0;  // Iteration count where best solution was found
 	int divergence_counter = 0;  // Counter for divergence detection

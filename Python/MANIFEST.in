@@ -1,0 +1,6 @@
+include README_Python.md
+include iccg.cpp
+include iccg.h
+global-exclude *.pyc
+global-exclude __pycache__
+global-exclude .git*

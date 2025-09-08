@@ -116,7 +116,7 @@ ICCGResult solve_iccg(
 	solver.setCurrentShift(shift);
 	
 	// Prepare solution vector
-	py::array_t<double> x_array({n});
+	py::array_t<double> x_array({static_cast<py::ssize_t>(n)});
 	auto x_ptr = static_cast<double*>(x_array.request().ptr);
 	
 	// Set initial guess
