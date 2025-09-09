@@ -8,12 +8,8 @@ if exist('iccg_mex.mexw64', 'file') ~=3
 	mex -v COPTIMFLAGS="/O2" COMPFLAGS="$COMPFLAGS /utf-8" -I.. iccg_mex.cpp ..\iccg.cpp;
 end
 
-rng(0);
-N = 10000;
-A = sprandsym(N, 10/N) + 7.4*speye(N);
-b = ones(N,1);
-
-save('../Ab.mat','A','b');
+load('../Ab.mat');
+N = size(A, 1);
 
 set(gcf,'Units','Pixels','Position',[100,30,800,700]);
 a1 = axes('Units','Pixels','Position',[120, 85, 600, 600],'FontName','Times New Roman','FontSize',20);
