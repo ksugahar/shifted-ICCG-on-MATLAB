@@ -3,9 +3,15 @@ close all;
 format long;
 warning off;
 
-delete('iccg_mex.mexw64');
-if exist('iccg_mex.mexw64', 'file') ~=3
-	mex -v COPTIMFLAGS="/O2" COMPFLAGS="$COMPFLAGS /utf-8" -I.. iccg_mex.cpp ..\iccg.cpp;
+prompt = 'Do you want to recompile mex? [y/n]: ';
+userInput = input(prompt, 's');
+
+if strcmpi(userInput, 'y')
+	delete('iccg_mex.mexw64');
+	if exist('iccg_mex.mexw64', 'file') ~=3
+		mex -v COPTIMFLAGS="/O2" COMPFLAGS="$COMPFLAGS /utf-8" -I.. iccg_mex.cpp ..\iccg.cpp;
+	end
+else
 end
 
 load('../Ab.mat');
@@ -36,9 +42,10 @@ for shift = [1.0, 2.0];
 	plot(residual_log, 'k.-', 'MarkerSize', 18);
 
 	label{end+1} = sprintf('MEX C shift=%.2f',shift_used);
+
+	save(sprintf('%s_shift=%.1f.mat', mfilename, shift), 'residual_log', 'shift_used');
 end
 end
 
 legend(label, 'box', 'off');
 exportgraphics(gcf, sprintf('%s.png', mfilename));
-

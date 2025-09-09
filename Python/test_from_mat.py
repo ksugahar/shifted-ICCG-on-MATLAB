@@ -7,7 +7,7 @@ import numpy as np
 import scipy.io as sio
 import scipy.sparse as sp
 import matplotlib.pyplot as plt
-import time
+import os, time
 
 def symmetric_sparse_to_csr(A):
 	"""Convert symmetric sparse matrix to CSR format (lower triangular part only)."""
@@ -87,14 +87,18 @@ def main():
 			iter_best = result.iter_best
 			residual_log = result.residual_log
 			shift_used = result.shift_used
-			
+
+			dict = {'shift_used': shift_used, 'residual_log': residual_log}
+			FileName = os.path.splitext(os.path.basename(__file__))[0] +  f"_shift={shift_used:.2f}.mat"
+			sio.savemat(FileName, dict)
+
 			print(f"Python C++	elapsed time = {elapsed_time:.2f} sec")
 			print(f"|x| = {np.linalg.norm(x):.2f},	|Ax-b|/|b| = {np.linalg.norm(A @ x - b)/np.linalg.norm(b):.3e},	iter = {iter_best},	shift = {shift_used:.2f}")
 			
 			# Plot convergence
 			plt.semilogy(residual_log, '.-', markersize=8, label=f'Python C++ shift={shift_used:.2f}')
 			labels.append(f'Python C++ shift={shift_used:.2f}')
-			
+
 		except ImportError as e:
 			print(f"ERROR: iccg_solver module not found. Please build it first:")
 			print("  python.exe -m pip install --upgrade pip setuptools wheel")
@@ -112,7 +116,7 @@ def main():
 	plt.title('ICCG Convergence Comparison (Python)')
 	plt.savefig('test_iccg_python.png', dpi=150, bbox_inches='tight')
 	print("\nPlot saved as 'test_iccg_python.png'")
-	plt.show()
+	os.startfile('test_iccg_python.png')
 
 if __name__ == "__main__":
 	main()
